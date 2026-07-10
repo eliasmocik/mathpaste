@@ -1,0 +1,2 @@
+latex2mathml>=3.77
+pyobjc-framework-Cocoa>=10.0
