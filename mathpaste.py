@@ -1,137 +1,243 @@
 #!/usr/bin/env python3
-"""mathpaste — turn LaTeX on the clipboard into a native Word equation.
+"""mathpaste — turn copied LaTeX into native Word equations, formatting intact.
 
-Copy raw LaTeX (e.g. \\frac{dv}{dt}=...) from ChatGPT, Claude, anywhere.
-Run this. It reads the clipboard, converts LaTeX -> MathML, and rewrites the
-clipboard as HTML-wrapped MathML on the macOS `public.html` flavor. Paste into
-Microsoft Word for Mac and you get a real, rendered equation instead of the
-raw source string.
+Copy a mix of prose and LaTeX (e.g. from ChatGPT), trigger mathpaste, and paste
+into Microsoft Word. It splits the selection into paragraphs, converts only the
+ones that are math (LaTeX -> MathML), keeps the prose and the line breaks, and
+rewrites the clipboard so Word rebuilds each equation as a native object.
 
-Because it operates at the clipboard, it is app-agnostic: it does not care
-which app the LaTeX came from, so it keeps working even when ChatGPT changes
-what it puts on the clipboard.
+Because ChatGPT does not tag its math, "is this paragraph math?" is a heuristic:
+a block is treated as math if it carries LaTeX commands / operators and reads
+like an equation rather than a sentence. Paragraph-level classification keeps
+that reliable for normal ChatGPT / Claude output.
 
 Usage:
-    mathpaste            # convert whatever LaTeX is on the clipboard
-    mathpaste --check    # print the generated MathML, don't touch the clipboard
-    echo '\\frac a b' | mathpaste -   # read LaTeX from stdin instead
+    mathpaste            # convert whatever is on the clipboard
+    mathpaste --check    # print the generated HTML, don't touch the clipboard
+    echo '...' | mathpaste -   # read text from stdin instead
 """
 from __future__ import annotations
 
+import re
 import sys
+from html import escape as html_escape
+from html.parser import HTMLParser
 
 from latex2mathml.converter import convert as latex_to_mathml
 
 import AppKit  # PyObjC — macOS NSPasteboard access
 
 
-MATHML_NS = "http://www.w3.org/1998/Math/MathML"
+# A private flavor we stamp on clipboards we've already converted, so an
+# always-on watcher never reprocesses mathpaste's own output.
+MARKER_TYPE = "org.mathpaste.processed"
 
 
-def read_clipboard_text() -> str:
-    """Return the plain-text contents of the macOS clipboard."""
+# ---------------------------------------------------------------------------
+# Clipboard I/O
+# ---------------------------------------------------------------------------
+
+def read_clipboard() -> tuple[str | None, str | None]:
+    """Return (html, plain_text) from the clipboard; either may be None."""
     pb = AppKit.NSPasteboard.generalPasteboard()
+    html = pb.stringForType_(AppKit.NSPasteboardTypeHTML)
     text = pb.stringForType_(AppKit.NSPasteboardTypeString)
-    return text or ""
+    return html, text
 
 
-def strip_delimiters(latex: str) -> tuple[str, bool]:
-    """Strip surrounding math delimiters and detect display (block) mode.
-
-    Returns (clean_latex, is_display). Handles $$...$$, \\[...\\], $...$,
-    \\(...\\), and a bare `\\begin{equation}`-style body left as-is.
-    """
-    s = latex.strip()
-    is_display = False
-
-    pairs = [
-        ("$$", "$$", True),
-        (r"\[", r"\]", True),
-        (r"\(", r"\)", False),
-        ("$", "$", False),
-    ]
-    for open_, close_, display in pairs:
-        if s.startswith(open_) and s.endswith(close_) and len(s) >= len(open_) + len(close_):
-            s = s[len(open_): len(s) - len(close_)].strip()
-            is_display = display
-            break
-
-    return s, is_display
+def clipboard_is_marked() -> bool:
+    """True if we already converted whatever is on the clipboard."""
+    pb = AppKit.NSPasteboard.generalPasteboard()
+    return MARKER_TYPE in list(pb.types() or [])
 
 
-def latex_to_mathml_and_html(latex: str, display: bool | None = None) -> tuple[str, str]:
-    """Convert LaTeX to (bare presentation MathML, HTML-wrapped MathML).
-
-    `display=None` auto-detects block vs inline from the delimiters.
-    """
-    clean, detected_display = strip_delimiters(latex)
-    if display is None:
-        display = detected_display
-
-    mathml = latex_to_mathml(clean)
-
-    # latex2mathml emits display="inline" by default; honour block mode.
-    if display:
-        mathml = mathml.replace('display="inline"', 'display="block"', 1)
-
-    # Minimal HTML wrapper. Word for Mac reads MathML from the public.html
-    # flavor and rebuilds it into a native equation on plain Cmd+V.
-    html = (
-        "<html><head>"
-        '<meta charset="utf-8"></head><body>'
-        f"{mathml}"
-        "</body></html>"
-    )
-    return mathml, html
-
-
-def write_clipboard(html: str, mathml: str) -> None:
-    """Write the equation to the macOS clipboard in two flavors.
-
-    - public.html  -> HTML-wrapped MathML; plain Cmd+V into current Word for
-      Mac auto-converts it to a native equation.
-    - public.utf8-plain-text -> the raw MathML; on older Word builds this is the
-      Edit -> Paste Special -> Unformatted Text fallback that still converts.
-    """
+def write_clipboard(html: str, plain: str) -> None:
+    """Write the result to the clipboard as HTML (+ plain-text fallback + marker)."""
     pb = AppKit.NSPasteboard.generalPasteboard()
     pb.clearContents()
     pb.declareTypes_owner_(
-        [AppKit.NSPasteboardTypeHTML, AppKit.NSPasteboardTypeString], None
+        [AppKit.NSPasteboardTypeHTML, AppKit.NSPasteboardTypeString, MARKER_TYPE], None
     )
     pb.setString_forType_(html, AppKit.NSPasteboardTypeHTML)
-    pb.setString_forType_(mathml, AppKit.NSPasteboardTypeString)
+    pb.setString_forType_(plain, AppKit.NSPasteboardTypeString)
+    pb.setString_forType_("1", MARKER_TYPE)
 
+
+# ---------------------------------------------------------------------------
+# Splitting the selection into paragraph blocks
+# ---------------------------------------------------------------------------
+
+_BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+               "tr", "blockquote", "pre"}
+
+
+class _BlockExtractor(HTMLParser):
+    """Collect block-level text runs from HTML, <br> -> newline."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[str] = []
+        self._cur: str | None = None
+
+    def _flush(self) -> None:
+        if self._cur is not None and self._cur.strip():
+            self.blocks.append(self._cur.strip())
+        self._cur = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _BLOCK_TAGS:
+            self._flush()
+            self._cur = ""
+        elif tag == "br":
+            if self._cur is None:
+                self._cur = ""
+            self._cur += "\n"
+
+    def handle_endtag(self, tag):
+        if tag in _BLOCK_TAGS:
+            self._flush()
+
+    def handle_data(self, data):
+        if self._cur is None:
+            self._cur = ""
+        self._cur += data
+
+    def close(self):
+        super().close()
+        self._flush()
+
+
+def split_blocks(html: str | None, text: str | None) -> list[str]:
+    """Return an ordered list of paragraph blocks from HTML (preferred) or text."""
+    if html and "<" in html:
+        parser = _BlockExtractor()
+        parser.feed(html)
+        parser.close()
+        if parser.blocks:
+            return parser.blocks
+    # Fallback: split plain text on blank lines.
+    if text:
+        return [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Math detection + conversion
+# ---------------------------------------------------------------------------
+
+_LATEX_CMD = re.compile(r"\\[a-zA-Z]+")
+_WORD = re.compile(r"[A-Za-z]{3,}")          # a real word => leans prose
+_MATH_OP = re.compile(r"[=<>]")
+
+
+def strip_delimiters(latex: str) -> tuple[str, bool]:
+    """Strip $…$, $$…$$, \\[…\\], \\(…\\) and report display (block) mode."""
+    s = latex.strip()
+    for open_, close_, display in (("$$", "$$", True), (r"\[", r"\]", True),
+                                   (r"\(", r"\)", False), ("$", "$", False)):
+        if s.startswith(open_) and s.endswith(close_) and len(s) >= len(open_) + len(close_):
+            return s[len(open_):len(s) - len(close_)].strip(), display
+    return s, False
+
+
+def is_math(block: str) -> bool:
+    """Heuristic: does this paragraph read as an equation rather than prose?"""
+    core, _ = strip_delimiters(block)
+    core = core.strip()
+    if not core:
+        return False
+    if _LATEX_CMD.search(core):        # \frac, \int, \ln, \alpha, ...
+        return True
+    if re.search(r"[\^_]", core):      # superscripts / subscripts
+        return True
+    # A standalone equation with an operator and no real words (only variables).
+    words = _WORD.findall(re.sub(r"\\[a-zA-Z]+", "", core))
+    if _MATH_OP.search(core) and not words:
+        return True
+    return False
+
+
+def convert_block(block: str) -> tuple[str, str]:
+    """Convert one block -> (html_fragment, plain_fragment).
+
+    Math blocks become <p>MathML</p>; anything that isn't math, or fails to
+    convert, is kept verbatim as escaped text so one bad block never derails the
+    whole paste.
+    """
+    if is_math(block):
+        core, display = strip_delimiters(block)
+        core = " ".join(core.split())  # join multi-line equations onto one line
+        try:
+            mathml = latex_to_mathml(core)
+            if display:
+                mathml = mathml.replace('display="inline"', 'display="block"', 1)
+            else:
+                # Standalone equation blocks read better as display math.
+                mathml = mathml.replace('display="inline"', 'display="block"', 1)
+            return f"<p>{mathml}</p>", core
+        except Exception:
+            pass  # fall through to text
+    # Prose (or unconvertible): keep text, turn internal newlines into <br>.
+    safe = "<br>".join(html_escape(line) for line in block.split("\n"))
+    return f"<p>{safe}</p>", block
+
+
+def build(blocks: list[str]) -> tuple[str, str, int]:
+    """Assemble the output HTML + plain text; return (html, plain, math_count)."""
+    html_parts, text_parts, n_math = [], [], 0
+    for b in blocks:
+        frag_html, frag_text = convert_block(b)
+        if "<math" in frag_html:
+            n_math += 1
+        html_parts.append(frag_html)
+        text_parts.append(frag_text)
+    html = ("<html><head><meta charset=\"utf-8\"></head><body>"
+            + "".join(html_parts) + "</body></html>")
+    return html, "\n".join(text_parts), n_math
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main(argv: list[str]) -> int:
     check_only = "--check" in argv
     from_stdin = "-" in argv
+    auto = "--auto" in argv  # watcher mode: stay silent on no-op cases
+
+    # In watcher mode, never touch a clipboard we already converted (loop guard).
+    if auto and not from_stdin and clipboard_is_marked():
+        return 0
 
     if from_stdin:
-        latex = sys.stdin.read()
+        html, text = None, sys.stdin.read()
     else:
-        latex = read_clipboard_text()
+        html, text = read_clipboard()
 
-    if not latex.strip():
-        print("mathpaste: clipboard (or stdin) is empty — copy some LaTeX first.",
+    blocks = split_blocks(html, text)
+    if not blocks:
+        if auto:
+            return 0
+        print("mathpaste: clipboard (or stdin) is empty — copy something first.",
               file=sys.stderr)
         return 1
 
-    try:
-        mathml, html = latex_to_mathml_and_html(latex)
-    except Exception as exc:  # noqa: BLE001 — surface any conversion failure plainly
-        print(f"mathpaste: could not convert LaTeX -> MathML: {exc}", file=sys.stderr)
-        print(f"  input was: {latex.strip()[:120]}", file=sys.stderr)
-        return 2
+    out_html, out_text, n_math = build(blocks)
+
+    if n_math == 0:
+        if auto:
+            return 0  # nothing to convert — leave the clipboard alone silently
+        print("mathpaste: no math found in the selection — clipboard left as-is.",
+              file=sys.stderr)
+        return 3
 
     if check_only:
-        print(html)
+        print(out_html)
         return 0
 
-    write_clipboard(html, mathml)
-    preview = latex.strip().replace("\n", " ")
-    if len(preview) > 60:
-        preview = preview[:57] + "..."
-    print(f"mathpaste: clipboard ready — paste into Word.  ({preview})")
+    write_clipboard(out_html, out_text)
+    plural = "equation" if n_math == 1 else "equations"
+    print(f"mathpaste: {n_math} {plural} ready — paste into Word.")
     return 0
 
 

@@ -1,103 +1,95 @@
 # mathpaste
 
-Copy LaTeX. Paste a real equation into Word.
+Copy LaTeX, paste a real equation into Word.
 
-When you copy an equation from ChatGPT and paste it into Microsoft Word, you
-get the raw source — `\frac{dv}{dt}=\frac{dv}{dx}\frac{dx}{dt}` — instead of the
-rendered math. **mathpaste** fixes that. It sits at the clipboard, converts the
-LaTeX to MathML (the format Word rebuilds into a native equation), and rewrites
-the clipboard so your next paste is proper math.
+Ok real talk: you copy an equation from ChatGPT, paste it into Word, and instead of the actual
+fraction you get `\frac{dv}{dt}=\frac{dv}{dx}\frac{dx}{dt}` sitting there as raw text. mathpaste
+fixes that. You copy like normal, and when you paste into Word you get proper, rendered math.
 
-```
-copy LaTeX  →  ⌥⌘M  →  paste into Word  →  native equation
-```
+It sits at the clipboard, so it doesn't care which app the LaTeX came from - ChatGPT, Claude, a
+PDF, wherever. ChatGPT can change whatever they want next month and this still works.
 
-## Why the clipboard, not a browser extension
+## Why it happens
 
 An equation can travel on the clipboard in different "languages":
 
-- **LaTeX** — the source code. Compact, but it's just text. Word won't render it.
-- **MathML** — a structured description Word knows how to rebuild into a real equation.
+- **LaTeX** (`\frac{dv}{dt}`) => the source code. Compact, but it's just text. Word won't render it.
+- **MathML** => a structured description of the math that Word knows how to rebuild into an equation.
 
-Some apps (Claude) put MathML on the clipboard, so Word renders on paste.
-ChatGPT now puts **only LaTeX text**, so you get the raw string. mathpaste
-inserts the missing translation step — LaTeX → MathML — right at the clipboard.
+Claude puts MathML on the clipboard, so Word renders it. ChatGPT now puts only LaTeX text, so you
+get the raw string. mathpaste is the missing translator: LaTeX => MathML, right at the clipboard.
 
-Because it lives at the clipboard, it's **app-agnostic**: ChatGPT can change
-whatever it wants and this still works, unlike a site-specific extension that
-breaks every time they touch their page.
+## What you need
 
-## Requirements
-
-- macOS
-- Python 3.9+
-- Microsoft Word for Mac (for the native-equation paste). Plain `Cmd+V`
-  auto-converts on recent builds (≈ Version 16.100+); older builds use the
-  Paste Special fallback below.
+- **macOS**
+- **Python 3.9+**
+- **Microsoft Word for Mac** (that's where the equation actually renders)
+- **Hammerspoon** for the automatic Cmd+C part (`brew install --cask hammerspoon`)
 
 ## Install
 
-```bash
+```sh
 git clone https://github.com/eliasmocik/mathpaste.git
 cd mathpaste
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-## v0 — CLI
+Then wire up the hotkey. Open [`hammerspoon-snippet.lua`](hammerspoon-snippet.lua), paste it into
+your `~/.hammerspoon/init.lua` (make the file if it isn't there), and set `MATHPASTE` to wherever
+you cloned this. Open Hammerspoon once, grant it **Accessibility** when it asks, and reload the
+config (menu-bar hammer => Reload Config).
 
-```bash
-# 1. Copy some LaTeX (from ChatGPT, Claude, anywhere)
-# 2. Convert the clipboard in place:
-./mathpaste
-# 3. Paste into Word.
+## Using it
+
+Just copy. Normal **Cmd+C**.
+
+1. Select math anywhere (ChatGPT, Claude, a PDF).
+2. **Cmd+C**.
+3. Wait for the **mathpaste ✓** flash (about half a second).
+4. Paste into Word.
+
+That's it. It watches the clipboard, and when it sees LaTeX it quietly swaps in the Word-friendly
+version. Normal text copies are left completely alone - it only touches the clipboard when there's
+actually math on it.
+
+It's smart about mixed selections too: grab a whole chunk of prose + equations and it keeps the
+words as words, keeps the line breaks, and only turns the math into math.
+
+> **Wait for the ✓ before you paste.** If you paste instantly you'll get the raw copy - the
+> conversion takes a beat.
+
+### Without the hotkey
+
+You can also just run it on whatever's on the clipboard:
+
+```sh
+./mathpaste            # convert the clipboard
+./mathpaste --check    # print the MathML, don't touch the clipboard
+echo '\frac a b' | ./mathpaste -   # read from stdin
 ```
 
-Other forms:
+## Where it works
 
-```bash
-echo '\frac{a}{b}=c^2' | ./mathpaste -   # read LaTeX from stdin
-./mathpaste --check                       # print the MathML, don't touch clipboard
-```
-
-Delimiters are handled automatically: `$…$` and `\(…\)` → inline,
-`$$…$$` and `\[…\]` → display (block).
-
-## v1 — global hotkey (Hammerspoon)
-
-So you never see a terminal:
-
-```bash
-brew install --cask hammerspoon
-```
-
-Open Hammerspoon once and grant it Accessibility permission when asked. Then
-append [`hammerspoon-snippet.lua`](hammerspoon-snippet.lua) to
-`~/.hammerspoon/init.lua` and reload the config (menu-bar icon → Reload Config).
-
-Now: **copy LaTeX → ⌥⌘M → paste into Word.**
-
-## If plain paste shows raw markup
-
-On older Word for Mac builds, plain `Cmd+V` may not auto-convert. Use
-**Edit → Paste Special → Unformatted Text** instead — mathpaste also puts the
-raw MathML on the plain-text flavor for exactly this fallback.
+- **Word for Mac** => native equation. This is the one it's built for.
+- **Apple Mail / rich web editors** => usually works (they render MathML).
+- **Google Docs** => no. Docs won't import MathML on paste, full stop.
+- **Plain text stuff** (Slack, terminal, code) => you get the raw MathML, which is ugly. Don't.
 
 ## How it works
 
-`latex2mathml` converts the LaTeX to **presentation MathML** with the full
-`http://www.w3.org/1998/Math/MathML` namespace (the one detail that breaks most
-DIY attempts — Word silently refuses MathML with a truncated namespace). The
-result is written to the macOS clipboard via `NSPasteboard` in two flavors:
-`public.html` (HTML-wrapped MathML, for plain-paste) and `public.utf8-plain-text`
-(raw MathML, for the Paste Special fallback).
+`latex2mathml` turns the LaTeX into presentation MathML with the full namespace (the one detail
+that quietly breaks most DIY attempts - Word rejects MathML with a truncated namespace). That gets
+written to the clipboard as HTML, which Word rebuilds into a real equation on paste. A little
+Hammerspoon watcher runs the whole thing automatically on Cmd+C.
 
-## Limitations
+## Heads up
 
-- Very complex multiline structures (`\begin{aligned}`, big matrices) can
-  occasionally fail to convert on Word's side. Simple/standard math is reliable.
-- Word for Mac must have the MathML import filter (any reasonably current build).
+- ChatGPT doesn't tag its math, so "is this bit math?" is a heuristic. It's reliable for normal
+  ChatGPT / Claude output, but it can miss a bare equation with no `\commands` in it.
+- Really gnarly multi-line stuff (big `\begin{aligned}` blocks, huge matrices) can occasionally
+  refuse to convert on Word's end. Simple, everyday math is solid.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
