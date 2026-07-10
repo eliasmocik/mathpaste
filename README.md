@@ -1,9 +1,8 @@
 # mathpaste
 
-Copy LaTeX, paste a real equation into Word.
-
-Copy an equation from ChatGPT into Word and you get raw `\frac{dv}{dt}` instead of the math.
-mathpaste fixes that at the clipboard.
+ChatGPT equations used to paste into Word as real math. Now you just get raw LaTeX like
+`\frac{dv}{dt}`. mathpaste fixes that automatically at the clipboard: copy as normal, paste a
+real equation.
 
 ## Install
 
