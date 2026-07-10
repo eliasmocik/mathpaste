@@ -19,7 +19,6 @@ Usage:
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 import time
 from html import escape as html_escape
@@ -205,17 +204,6 @@ def build(blocks: list[str]) -> tuple[str, str, int]:
 _LOOKS_MATH = re.compile(r"\\[a-zA-Z]|[\^_]")  # a \command, or ^ / _
 
 
-def _notify(message: str) -> None:
-    """Fire-and-forget macOS notification; never blocks the loop."""
-    try:
-        subprocess.Popen(
-            ["osascript", "-e", f'display notification "{message}"'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
-
-
 def watch(poll: float = 0.4) -> int:
     """Poll the clipboard; when math is copied, convert it in place.
 
@@ -245,7 +233,6 @@ def watch(poll: float = 0.4) -> int:
                 continue
             write_clipboard(out_html, out_text)
             last = pb.changeCount()  # swallow our own write
-            _notify("mathpaste ✓")
         except Exception as exc:  # keep the daemon alive no matter what
             print(f"mathpaste watch error: {exc}", file=sys.stderr, flush=True)
 

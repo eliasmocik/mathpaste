@@ -19,10 +19,10 @@ Remove it with `./setup --uninstall`.
 
 1. Select math anywhere.
 2. **Cmd+C**.
-3. Wait for **mathpaste ✓**.
-4. Paste into Word.
+3. Paste into Word.
 
-Normal copies are untouched. Mixed prose + equations keep their formatting.
+It converts in the background, so give it a beat between copy and paste. Normal copies are
+untouched. Mixed prose + equations keep their formatting.
 
 ## Where it works
 
