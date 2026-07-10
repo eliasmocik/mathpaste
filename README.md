@@ -10,12 +10,11 @@ mathpaste fixes that at the clipboard.
 ```sh
 git clone https://github.com/eliasmocik/mathpaste.git
 cd mathpaste
-python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-brew install --cask hammerspoon
+./setup
 ```
 
-Paste [`hammerspoon-snippet.lua`](hammerspoon-snippet.lua) into `~/.hammerspoon/init.lua`, set
-`MATHPASTE` to this folder, open Hammerspoon, grant **Accessibility**, and reload the config.
+Needs macOS, Python 3.9+, and Word for Mac. Runs as a small background agent that starts at login.
+No Hammerspoon, no permissions. Remove it with `./setup --uninstall`.
 
 ## Use
 

@@ -19,7 +19,9 @@ Usage:
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
+import time
 from html import escape as html_escape
 from html.parser import HTMLParser
 
@@ -197,10 +199,65 @@ def build(blocks: list[str]) -> tuple[str, str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Background watcher (launchd agent) — auto-convert on plain Cmd+C
+# ---------------------------------------------------------------------------
+
+_LOOKS_MATH = re.compile(r"\\[a-zA-Z]|[\^_]")  # a \command, or ^ / _
+
+
+def _notify(message: str) -> None:
+    """Fire-and-forget macOS notification; never blocks the loop."""
+    try:
+        subprocess.Popen(
+            ["osascript", "-e", f'display notification "{message}"'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+def watch(poll: float = 0.4) -> int:
+    """Poll the clipboard; when math is copied, convert it in place.
+
+    Non-math copies are ignored; our own output is skipped via the marker, so
+    this never loops on itself. Reads/writes the clipboard only — no keystroke
+    simulation, so it needs no Accessibility permission.
+    """
+    pb = AppKit.NSPasteboard.generalPasteboard()
+    last = pb.changeCount()
+    while True:
+        time.sleep(poll)
+        try:
+            cc = pb.changeCount()
+            if cc == last:
+                continue
+            last = cc
+            if clipboard_is_marked():
+                continue
+            html, text = read_clipboard()
+            if not (text and _LOOKS_MATH.search(text)):
+                continue
+            blocks = split_blocks(html, text)
+            if not blocks:
+                continue
+            out_html, out_text, n_math = build(blocks)
+            if n_math == 0:
+                continue
+            write_clipboard(out_html, out_text)
+            last = pb.changeCount()  # swallow our own write
+            _notify("mathpaste ✓")
+        except Exception as exc:  # keep the daemon alive no matter what
+            print(f"mathpaste watch error: {exc}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str]) -> int:
+    if "--watch" in argv:
+        return watch()
+
     check_only = "--check" in argv
     from_stdin = "-" in argv
     auto = "--auto" in argv  # watcher mode: stay silent on no-op cases

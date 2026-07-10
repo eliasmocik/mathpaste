@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# mathpaste setup — installs a tiny background watcher that auto-converts math
+# on the clipboard. No Hammerspoon, no Accessibility, no extra permissions.
+#
+#   ./setup              install + start (and start at every login)
+#   ./setup --uninstall  stop + remove everything
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LABEL="com.eliasmocik.mathpaste"
+# Install runtime OUTSIDE ~/Desktop so a login agent isn't blocked by macOS TCC.
+INSTALL="$HOME/.mathpaste"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+stop_agent() {
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
+        || launchctl unload "$PLIST" 2>/dev/null || true
+}
+
+if [ "${1:-}" = "--uninstall" ]; then
+    stop_agent
+    rm -f "$PLIST"
+    rm -rf "$INSTALL"
+    echo "mathpaste removed."
+    exit 0
+fi
+
+echo "Installing mathpaste -> $INSTALL"
+mkdir -p "$INSTALL"
+cp "$REPO/mathpaste.py" "$INSTALL/mathpaste.py"
+
+python3 -m venv "$INSTALL/.venv"
+"$INSTALL/.venv/bin/pip" install --quiet --upgrade pip
+"$INSTALL/.venv/bin/pip" install --quiet -r "$REPO/requirements.txt"
+
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$INSTALL/.venv/bin/python</string>
+        <string>$INSTALL/mathpaste.py</string>
+        <string>--watch</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>$INSTALL/watch.log</string>
+    <key>StandardErrorPath</key><string>$INSTALL/watch.log</string>
+</dict>
+</plist>
+PLIST
+
+stop_agent
+launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
+
+echo "Done. mathpaste is running and will start at login."
+echo "  uninstall:  ./setup --uninstall"
+echo "  logs:       $INSTALL/watch.log"
