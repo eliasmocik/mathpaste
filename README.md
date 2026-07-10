@@ -14,7 +14,7 @@ cd mathpaste
 ```
 
 Needs macOS, Python 3.9+, and Word for Mac. Runs as a small background agent that starts at login.
-No Hammerspoon, no permissions. Remove it with `./setup --uninstall`.
+Remove it with `./setup --uninstall`.
 
 ## Use
 
