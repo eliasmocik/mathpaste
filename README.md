@@ -31,5 +31,3 @@ Normal copies are untouched. Mixed prose + equations keep their formatting.
 - **Word for Mac** => native equation.
 - **Apple Mail, rich web editors** => works.
 - **Google Docs** => no (can't import MathML).
-
-MIT.
