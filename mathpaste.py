@@ -52,6 +52,22 @@ def clipboard_is_marked() -> bool:
     return MARKER_TYPE in list(pb.types() or [])
 
 
+def clipboard_has_rtf() -> bool:
+    """True if the clipboard carries a rich-text (RTF) flavor — i.e. a copy from
+    Word or another rich editor.
+
+    The watcher must never touch these: rewriting the clipboard clears the native
+    formats (RTF, Word's own flavors) that an in-app / doc-to-doc paste relies on,
+    which is what deformatted pastes and leaked font-definition CSS. A copy from
+    ChatGPT or a plain-text source has no RTF flavor, so this only shields the
+    rich copies we have no business rewriting."""
+    pb = AppKit.NSPasteboard.generalPasteboard()
+    types = list(pb.types() or [])
+    return any(t in types for t in (AppKit.NSPasteboardTypeRTF,
+                                    AppKit.NSPasteboardTypeRTFD,
+                                    "public.rtf"))
+
+
 def write_clipboard(html: str, plain: str) -> None:
     """Write the result to the clipboard as HTML (+ plain-text fallback + marker)."""
     pb = AppKit.NSPasteboard.generalPasteboard()
@@ -201,7 +217,11 @@ def build(blocks: list[str]) -> tuple[str, str, int]:
 # Background watcher (launchd agent) — auto-convert on plain Cmd+C
 # ---------------------------------------------------------------------------
 
-_LOOKS_MATH = re.compile(r"\\[a-zA-Z]|[\^_]")  # a \command, or ^ / _
+# A copy only looks like math if it carries a real LaTeX command (\frac, \int, …)
+# or a math delimiter ($…$, $$…$$, \[…\], \(…\)). A bare ^ or _ is NOT enough:
+# underscores and carets are everywhere in ordinary text (snake_case, file names,
+# subscript-style notes), and firing on them is what broke normal pasting.
+_LOOKS_MATH = re.compile(r"\\[a-zA-Z]+|\$|\\\[|\\\(")
 
 
 def watch(poll: float = 0.4) -> int:
@@ -221,6 +241,9 @@ def watch(poll: float = 0.4) -> int:
                 continue
             last = cc
             if clipboard_is_marked():
+                continue
+            if clipboard_has_rtf():
+                # Rich copy (Word, etc.) — leave every flavor intact.
                 continue
             html, text = read_clipboard()
             if not (text and _LOOKS_MATH.search(text)):
