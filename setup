@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mathpaste setup — installs the converter runtime and a Hammerspoon hotkey
-# (⌘⌥C) that converts LaTeX on the clipboard into native Word equations.
+# (⌘⇧V) that converts LaTeX on the clipboard into native Word equations.
 #
 # Cmd+C is never intercepted: mathpaste only runs when you press the hotkey.
 #
@@ -60,7 +60,7 @@ python3 -m venv "$INSTALL/.venv"
 "$INSTALL/.venv/bin/pip" install --quiet --upgrade pip
 "$INSTALL/.venv/bin/pip" install --quiet -r "$REPO/requirements.txt"
 
-echo "Wiring the hotkey (Cmd+Opt+C) via Hammerspoon"
+echo "Wiring the hotkey (Cmd+Shift+V) via Hammerspoon"
 mkdir -p "$HS_DIR"
 cp "$REPO/hammerspoon/mathpaste.lua" "$HS_LUA"
 touch "$HS_INIT"
@@ -70,5 +70,5 @@ grep -q 'require("mathpaste")' "$HS_INIT" || \
     printf '%s\n' 'require("mathpaste")' >> "$HS_INIT"
 reload_hammerspoon
 
-echo "Done. Copy LaTeX, press Cmd+Opt+C to convert, then paste into Word."
+echo "Done. Copy LaTeX, press Cmd+Shift+V in Word to convert and paste."
 echo "  uninstall:  ./setup --uninstall"

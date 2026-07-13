@@ -17,12 +17,14 @@ Remove it with `./setup --uninstall`.
 ## Use
 
 1. Copy math (LaTeX) anywhere — a normal **Cmd+C**.
-2. Press **⌘⌥C** (command + option + C) to convert the clipboard.
-3. Paste into Word with **Cmd+V**.
+2. In Word, press **⌘⇧V** (command + shift + V) — your "math paste".
 
-The hotkey only ever touches the clipboard when you press it, and only rewrites it when the
-selection actually contains math — so ordinary copy/paste is never affected. Mixed prose +
-equations keep their formatting.
+That single press converts the clipboard and pastes the equation. If the clipboard has no math
+it just pastes as-is, so ⌘⇧V is always a safe paste. **Cmd+C is never intercepted** — ordinary
+copy/paste is untouched. Mixed prose + equations keep their formatting.
+
+Pasting synthesizes a Cmd+V, so Hammerspoon needs **Accessibility** permission
+(System Settings → Privacy & Security → Accessibility) — grant it on first use.
 
 > Earlier versions ran a background watcher that auto-converted on plain **Cmd+C**. That
 > silently mangled ordinary copies whose text merely *looked* mathy (a `$`, an underscore in a
