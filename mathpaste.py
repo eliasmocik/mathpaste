@@ -52,22 +52,6 @@ def clipboard_is_marked() -> bool:
     return MARKER_TYPE in list(pb.types() or [])
 
 
-def clipboard_has_rtf() -> bool:
-    """True if the clipboard carries a rich-text (RTF) flavor — i.e. a copy from
-    Word or another rich editor.
-
-    The watcher must never touch these: rewriting the clipboard clears the native
-    formats (RTF, Word's own flavors) that an in-app / doc-to-doc paste relies on,
-    which is what deformatted pastes and leaked font-definition CSS. A copy from
-    ChatGPT or a plain-text source has no RTF flavor, so this only shields the
-    rich copies we have no business rewriting."""
-    pb = AppKit.NSPasteboard.generalPasteboard()
-    types = list(pb.types() or [])
-    return any(t in types for t in (AppKit.NSPasteboardTypeRTF,
-                                    AppKit.NSPasteboardTypeRTFD,
-                                    "public.rtf"))
-
-
 def write_clipboard(html: str, plain: str) -> None:
     """Write the result to the clipboard as HTML (+ plain-text fallback + marker)."""
     pb = AppKit.NSPasteboard.generalPasteboard()
@@ -159,15 +143,24 @@ def strip_delimiters(latex: str) -> tuple[str, bool]:
 
 def is_math(block: str) -> bool:
     """Heuristic: does this paragraph read as an equation rather than prose?"""
-    core, _ = strip_delimiters(block)
+    s = block.strip()
+    core, _ = strip_delimiters(s)
     core = core.strip()
     if not core:
         return False
-    if _LATEX_CMD.search(core):        # \frac, \int, \ln, \alpha, ...
+    # Explicitly delimited math ($…$, $$…$$, \[…\], \(…\)) is math, period —
+    # the author told us so by wrapping it.
+    if core != s:
         return True
-    if re.search(r"[\^_]", core):      # superscripts / subscripts
+    # Undelimited: only a real LaTeX command (\frac, \int, \ln, \alpha, …) marks
+    # a bare block as math. A lone ^ or _ is NOT enough: underscores and carets
+    # live in ordinary prose and code (snake_case, file names like
+    # platform_linux.py), and firing on them is what shreds normal text into one
+    # character per line. See the matching guard in watch().
+    if _LATEX_CMD.search(core):
         return True
-    # A standalone equation with an operator and no real words (only variables).
+    # A standalone equation with a relational operator and no real words (only
+    # variables), e.g. "E = mc^2".
     words = _WORD.findall(re.sub(r"\\[a-zA-Z]+", "", core))
     if _MATH_OP.search(core) and not words:
         return True
@@ -242,10 +235,13 @@ def watch(poll: float = 0.4) -> int:
             last = cc
             if clipboard_is_marked():
                 continue
-            if clipboard_has_rtf():
-                # Rich copy (Word, etc.) — leave every flavor intact.
-                continue
             html, text = read_clipboard()
+            # Only ever fire on a copy carrying a real LaTeX command / math
+            # delimiter (browser copies from ChatGPT/Claude keep the raw source;
+            # so does plain text). A rich copy from Word renders its equations,
+            # so its plain text has no \command or $ and is skipped here — which
+            # is why we don't need a separate RTF guard. Browser math copies also
+            # carry an RTF flavor, so guarding on RTF wrongly blocked them.
             if not (text and _LOOKS_MATH.search(text)):
                 continue
             blocks = split_blocks(html, text)

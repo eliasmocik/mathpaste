@@ -1,62 +1,74 @@
 #!/usr/bin/env bash
-# mathpaste setup — installs a tiny background watcher that auto-converts math
-# on the clipboard. No Hammerspoon, no Accessibility, no extra permissions.
+# mathpaste setup — installs the converter runtime and a Hammerspoon hotkey
+# (⌘⌥C) that converts LaTeX on the clipboard into native Word equations.
 #
-#   ./setup              install + start (and start at every login)
-#   ./setup --uninstall  stop + remove everything
+# Cmd+C is never intercepted: mathpaste only runs when you press the hotkey.
+#
+#   ./setup              install + wire the hotkey
+#   ./setup --uninstall  remove everything
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LABEL="com.eliasmocik.mathpaste"
-# Install runtime OUTSIDE ~/Desktop so a login agent isn't blocked by macOS TCC.
+# Install runtime OUTSIDE ~/Desktop so macOS TCC doesn't block it.
 INSTALL="$HOME/.mathpaste"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+HS_DIR="$HOME/.hammerspoon"
+HS_LUA="$HS_DIR/mathpaste.lua"
+HS_INIT="$HS_DIR/init.lua"
+OLD_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
-stop_agent() {
+remove_old_watcher() {
+    # Older mathpaste ran a launchd Cmd+C watcher — tear it down if present.
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
-        || launchctl unload "$PLIST" 2>/dev/null || true
+        || launchctl unload "$OLD_PLIST" 2>/dev/null || true
+    rm -f "$OLD_PLIST"
+}
+
+reload_hammerspoon() {
+    # Reload config if the CLI port is up; otherwise just (re)launch the app.
+    if command -v hs >/dev/null 2>&1 && hs -c 'hs.reload()' >/dev/null 2>&1; then
+        return
+    fi
+    open -g -a Hammerspoon 2>/dev/null || true
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
-    stop_agent
-    rm -f "$PLIST"
+    remove_old_watcher
+    rm -f "$HS_LUA"
+    # drop our require lines from init.lua, leave the rest of the user's config
+    if [ -f "$HS_INIT" ]; then
+        grep -v 'require("mathpaste")' "$HS_INIT" \
+            | grep -v 'require("hs.ipc")' > "$HS_INIT.tmp" || true
+        mv "$HS_INIT.tmp" "$HS_INIT"
+    fi
     rm -rf "$INSTALL"
+    reload_hammerspoon
     echo "mathpaste removed."
     exit 0
 fi
 
-echo "Installing mathpaste -> $INSTALL"
+command -v hs >/dev/null 2>&1 || [ -d "/Applications/Hammerspoon.app" ] || {
+    echo "Hammerspoon is required: https://www.hammerspoon.org  (brew install hammerspoon)"
+    exit 1
+}
+
+echo "Installing mathpaste runtime -> $INSTALL"
+remove_old_watcher
 mkdir -p "$INSTALL"
 cp "$REPO/mathpaste.py" "$INSTALL/mathpaste.py"
-
 python3 -m venv "$INSTALL/.venv"
 "$INSTALL/.venv/bin/pip" install --quiet --upgrade pip
 "$INSTALL/.venv/bin/pip" install --quiet -r "$REPO/requirements.txt"
 
-mkdir -p "$HOME/Library/LaunchAgents"
-cat > "$PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>$LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$INSTALL/.venv/bin/python</string>
-        <string>$INSTALL/mathpaste.py</string>
-        <string>--watch</string>
-    </array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>$INSTALL/watch.log</string>
-    <key>StandardErrorPath</key><string>$INSTALL/watch.log</string>
-</dict>
-</plist>
-PLIST
+echo "Wiring the hotkey (Cmd+Opt+C) via Hammerspoon"
+mkdir -p "$HS_DIR"
+cp "$REPO/hammerspoon/mathpaste.lua" "$HS_LUA"
+touch "$HS_INIT"
+grep -q 'require("hs.ipc")' "$HS_INIT" || \
+    printf '%s\n' 'require("hs.ipc")  -- enables the `hs` command-line scripting port' >> "$HS_INIT"
+grep -q 'require("mathpaste")' "$HS_INIT" || \
+    printf '%s\n' 'require("mathpaste")' >> "$HS_INIT"
+reload_hammerspoon
 
-stop_agent
-launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
-
-echo "Done. mathpaste is running and will start at login."
+echo "Done. Copy LaTeX, press Cmd+Opt+C to convert, then paste into Word."
 echo "  uninstall:  ./setup --uninstall"
-echo "  logs:       $INSTALL/watch.log"
