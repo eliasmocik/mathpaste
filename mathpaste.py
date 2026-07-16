@@ -141,6 +141,41 @@ def strip_delimiters(latex: str) -> tuple[str, bool]:
     return s, False
 
 
+_BOX_CMD = re.compile(r"\\(?:boxed|fbox|framebox|boxed\*)\s*\{")
+
+
+def unbox(latex: str) -> str:
+    r"""Strip \boxed{…} / \fbox{…} wrappers, keeping the contents.
+
+    ChatGPT often wraps a final answer in \boxed{…}. That renders faithfully as
+    a framed equation in Word — which Elias then deletes by hand. We unwrap it
+    here (brace-matched, so nested {…} inside the box survive) before conversion.
+    Repeats until no wrapper remains, so \boxed{\boxed{x}} fully unwinds.
+    """
+    while True:
+        m = _BOX_CMD.search(latex)
+        if not m:
+            return latex
+        start = m.start()          # index of the backslash
+        open_brace = m.end() - 1   # index of the '{'
+        depth = 0
+        close = None
+        for i in range(open_brace, len(latex)):
+            c = latex[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    close = i
+                    break
+        if close is None:
+            # Unbalanced braces — leave the string alone rather than mangle it.
+            return latex
+        inner = latex[open_brace + 1:close]
+        latex = latex[:start] + inner + latex[close + 1:]
+
+
 def is_math(block: str) -> bool:
     """Heuristic: does this paragraph read as an equation rather than prose?"""
     s = block.strip()
@@ -176,6 +211,7 @@ def convert_block(block: str) -> tuple[str, str]:
     """
     if is_math(block):
         core, display = strip_delimiters(block)
+        core = unbox(core)  # drop \boxed{…}/\fbox{…} wrappers, keep the contents
         core = " ".join(core.split())  # join multi-line equations onto one line
         try:
             mathml = latex_to_mathml(core)
