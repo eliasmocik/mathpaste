@@ -10,8 +10,11 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LABEL="com.eliasmocik.mathpaste"
-# Install runtime OUTSIDE ~/Desktop so macOS TCC doesn't block it.
-INSTALL="$HOME/.mathpaste"
+# The repo IS the runtime — the hotkey points straight at $REPO/mathpaste.py, so
+# there's a single source of truth (editing the script takes effect immediately,
+# no copy step). If the repo lives under ~/Desktop, grant Hammerspoon Full Disk
+# Access so it can read it. $OLD_INSTALL is a legacy runtime copy we clean up.
+OLD_INSTALL="$HOME/.mathpaste"
 HS_DIR="$HOME/.hammerspoon"
 HS_LUA="$HS_DIR/mathpaste.lua"
 HS_INIT="$HS_DIR/init.lua"
@@ -41,7 +44,7 @@ if [ "${1:-}" = "--uninstall" ]; then
             | grep -v 'require("hs.ipc")' > "$HS_INIT.tmp" || true
         mv "$HS_INIT.tmp" "$HS_INIT"
     fi
-    rm -rf "$INSTALL"
+    rm -rf "$OLD_INSTALL"
     reload_hammerspoon
     echo "mathpaste removed."
     exit 0
@@ -52,13 +55,12 @@ command -v hs >/dev/null 2>&1 || [ -d "/Applications/Hammerspoon.app" ] || {
     exit 1
 }
 
-echo "Installing mathpaste runtime -> $INSTALL"
+echo "Building the runtime venv in the repo -> $REPO/.venv"
 remove_old_watcher
-mkdir -p "$INSTALL"
-cp "$REPO/mathpaste.py" "$INSTALL/mathpaste.py"
-python3 -m venv "$INSTALL/.venv"
-"$INSTALL/.venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL/.venv/bin/pip" install --quiet -r "$REPO/requirements.txt"
+rm -rf "$OLD_INSTALL"          # drop the legacy out-of-repo runtime copy
+python3 -m venv "$REPO/.venv"
+"$REPO/.venv/bin/pip" install --quiet --upgrade pip
+"$REPO/.venv/bin/pip" install --quiet -r "$REPO/requirements.txt"
 
 echo "Wiring the hotkey (Cmd+Shift+V) via Hammerspoon"
 mkdir -p "$HS_DIR"

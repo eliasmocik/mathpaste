@@ -9,8 +9,13 @@
 -- Pasting synthesizes Cmd+V, which needs Accessibility permission for
 -- Hammerspoon (System Settings > Privacy & Security > Accessibility).
 
-local PYTHON = os.getenv("HOME") .. "/.mathpaste/.venv/bin/python"
-local SCRIPT = os.getenv("HOME") .. "/.mathpaste/mathpaste.py"
+-- Point straight at the repo so it's the single source of truth: editing
+-- mathpaste.py here takes effect on the next hotkey press, with no install/copy
+-- step. The repo lives under ~/Desktop, so Hammerspoon needs Full Disk Access
+-- (System Settings > Privacy & Security > Full Disk Access) to read it.
+local REPO = os.getenv("HOME") .. "/Desktop/personal_projects/mathpaste"
+local PYTHON = REPO .. "/.venv/bin/python"
+local SCRIPT = REPO .. "/mathpaste.py"
 
 hs.accessibilityState(true)  -- prompt for the permission if it isn't granted yet
 
